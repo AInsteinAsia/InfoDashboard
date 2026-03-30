@@ -1,0 +1,33 @@
+[common]
+server_addr = YOUR_FRP_SERVER_IP
+server_port = 7000
+token = YOUR_FRP_TOKEN
+tls_enable = true
+
+log_file = ./frpc-visitor.log
+log_level = warn
+
+# --- Visitor: access remote SOCKS5 proxy on localhost:1080 -------------------
+[YOUR_PROJECT_socks5_visitor]
+type = stcp
+role = visitor
+server_name = YOUR_PROJECT_socks5
+sk = YOUR_STCP_SK
+bind_addr = 127.0.0.1
+bind_port = 1080
+
+# --- Visitor: access remote RDP on localhost:33890 (optional) ----------------
+[YOUR_PROJECT_rdp_visitor]
+type = stcp
+role = visitor
+server_name = YOUR_PROJECT_rdp
+sk = YOUR_STCP_SK
+bind_addr = 127.0.0.1
+bind_port = 33890
+
+# === Reverse channel: allow remote to access local proxy =====================
+[LOCAL_socks5]
+type = stcp
+sk = YOUR_LOCAL_STCP_SK
+local_ip = 127.0.0.1
+local_port = 8888

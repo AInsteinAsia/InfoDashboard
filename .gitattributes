@@ -1,0 +1,2 @@
+tools/frpc-linux filter=lfs diff=lfs merge=lfs -text
+tools/frpc.exe filter=lfs diff=lfs merge=lfs -text
