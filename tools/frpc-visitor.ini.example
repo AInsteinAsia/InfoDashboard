@@ -13,7 +13,7 @@ type = stcp
 role = visitor
 server_name = YOUR_PROJECT_socks5
 sk = YOUR_STCP_SK
-bind_addr = 127.0.0.1
+bind_addr = 0.0.0.0
 bind_port = 1080
 
 # --- Visitor: access remote RDP on localhost:33890 (optional) ----------------
