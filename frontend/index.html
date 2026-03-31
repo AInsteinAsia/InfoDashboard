@@ -355,6 +355,9 @@ function sendRequest() {
           }
         }
         pump();
+      }).catch(err => {
+        appendErrorCard('连接中断：' + err.message);
+        sendBtn.disabled = false;
       });
     }
     pump();
