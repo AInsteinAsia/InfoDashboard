@@ -70,13 +70,14 @@ SYSTEM_PROMPT = f"""\
 
 3. 所有 SQL 必须使用参数化查询：`cursor.execute(sql, (param1, param2))`，严禁字符串拼接或 f-string
 4. SQL 字符串中的 `%` 必须写成 `%%`（如 `LIKE '%%keyword%%'`），否则 pytds 会把它当成格式化符号报错
+5. 使用 `SELECT DISTINCT` 时，`ORDER BY` 的字段必须出现在 `SELECT` 列表中，否则 SQL Server 报错
 5. 涉及字符串列的 JOIN 或比较，必须加 `COLLATE Chinese_PRC_CI_AS` 避免排序规则冲突，例如：`a.col = b.col COLLATE Chinese_PRC_CI_AS`
-6. 使用 `@st.cache_data(ttl=180)` 缓存所有查询函数（3 分钟）
-7. 使用 `plotly.express` 绘图，`st.plotly_chart(fig, use_container_width=True)`
-8. 筛选控件全部放在 `st.sidebar`
-9. 用 `st.error()` 捕获并展示数据库异常，不要让 app crash
-10. 第一行：`st.set_page_config(layout="wide", page_title="<看板标题>")`
-11. 在 `st.set_page_config` 之后立即加自动刷新：`from streamlit_autorefresh import st_autorefresh` / `st_autorefresh(interval=180_000, key="autorefresh")`
+7. 使用 `@st.cache_data(ttl=180)` 缓存所有查询函数（3 分钟）
+8. 使用 `plotly.express` 绘图，`st.plotly_chart(fig, use_container_width=True)`
+9. 筛选控件全部放在 `st.sidebar`
+10. 用 `st.error()` 捕获并展示数据库异常，不要让 app crash
+11. 第一行：`st.set_page_config(layout="wide", page_title="<看板标题>")`
+12. 在 `st.set_page_config` 之后立即加自动刷新：`from streamlit_autorefresh import st_autorefresh` / `st_autorefresh(interval=180_000, key="autorefresh")`
 
 ## 输出格式（必须严格遵守，用于代码提取）
 
