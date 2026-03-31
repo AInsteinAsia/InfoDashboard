@@ -22,6 +22,7 @@ Three-step flow (inspired by how a real analyst works):
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -151,7 +152,7 @@ async def run(state: DashboardState, config: RunnableConfig) -> dict:
         AGENT_ID,
     )
 
-    requirements = _parse_requirements(raw)
+    requirements = _parse_requirements(raw, fallback_tables=selected_tables)
 
     await emit(config, {
         "type": "action",
@@ -173,14 +174,21 @@ async def _select_tables(user_request: str, all_tables: list[str], config: Runna
     """Call LLM with just table names to pick the relevant subset."""
     table_list_str = "\n".join(f"- {t}" for t in all_tables)
     llm = get_llm()
-    msg = await llm.ainvoke([
-        SystemMessage(content=_TABLE_SELECT_PROMPT),
-        HumanMessage(content=(
-            f"用户需求：{user_request}\n\n"
-            f"所有表名：\n{table_list_str}"
-        )),
-    ])
-    raw = msg.content if isinstance(msg.content, str) else ""
+    raw = ""
+    for attempt in range(1, 3):
+        msg = await llm.ainvoke([
+            SystemMessage(content=_TABLE_SELECT_PROMPT),
+            HumanMessage(content=(
+                f"用户需求：{user_request}\n\n"
+                f"所有表名：\n{table_list_str}"
+            )),
+        ])
+        raw = msg.content if isinstance(msg.content, str) else ""
+        if raw:
+            break
+        _log.warning("_select_tables: empty response on attempt %d/2", attempt)
+        if attempt < 2:
+            await asyncio.sleep(2)
 
     # Parse the JSON array from the response
     try:
@@ -207,7 +215,7 @@ async def _select_tables(user_request: str, all_tables: list[str], config: Runna
     return [t for t, _ in scored[:5]] or all_tables[:5]
 
 
-def _parse_requirements(raw: str) -> RequirementsSpec:
+def _parse_requirements(raw: str, fallback_tables: list[str] | None = None) -> RequirementsSpec:
     """Extract the JSON object from the LLM response and validate it."""
     text = raw.strip()
 
@@ -244,6 +252,6 @@ def _parse_requirements(raw: str) -> RequirementsSpec:
             dimensions=["日期"],
             chart_types=["bar"],
             filters=[],
-            relevant_tables=[],
+            relevant_tables=fallback_tables or [],
             sql_hints="",
         )

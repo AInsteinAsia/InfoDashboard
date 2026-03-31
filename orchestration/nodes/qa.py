@@ -87,6 +87,11 @@ async def run(state: DashboardState, config: RunnableConfig) -> dict:
         if re.search(pattern, code.app_py, re.DOTALL):
             issues.append(f"SQL 注入风险：{desc}")
 
+    # ── Check 2b: unescaped % in LIKE (pytds treats % as format specifier) ───
+    await emit(config, {"type": "thinking", "data": {"stage": "percent_check", "message": "检查 LIKE 子句 % 转义..."}})
+    if re.search(r"LIKE\s+['\"]%[^%]|LIKE\s+['\"][^'\"]*[^%]%['\"]", code.app_py):
+        issues.append("SQL LIKE 子句含未转义的 %（pytds 会报 string formatting 错误），必须写为 %%，如 LIKE '%%value%%'")
+
     # ── Check 3: Dangerous code ───────────────────────────────────────────────
     for pattern, desc in _DANGEROUS_PATTERNS:
         if re.search(pattern, code.app_py):

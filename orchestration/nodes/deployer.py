@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import shutil
 import uuid
 from pathlib import Path
 
@@ -81,6 +82,7 @@ async def run(state: DashboardState, config: RunnableConfig) -> dict:
     try:
         await asyncio.to_thread(build_image, str(base_dir), image_name)
     except Exception as exc:
+        shutil.rmtree(base_dir, ignore_errors=True)
         await emit(config, {"type": "error", "data": {"message": f"Docker 构建失败：{exc}"}})
         await emit(config, {"type": "agent_end", "data": {"agentId": AGENT_ID}})
         return {"error": str(exc)}
@@ -103,7 +105,10 @@ async def run(state: DashboardState, config: RunnableConfig) -> dict:
         "data": {"stage": "docker_run", "message": f"启动容器，端口 {port}..."},
     })
     try:
-        container_id = await asyncio.to_thread(run_dashboard, image_name, port, env_vars)
+        container_id = await asyncio.to_thread(
+            run_dashboard, image_name, port, env_vars,
+            {"generated-dir": str(base_dir)},
+        )
     except Exception as exc:
         await emit(config, {"type": "error", "data": {"message": f"容器启动失败：{exc}"}})
         await emit(config, {"type": "agent_end", "data": {"agentId": AGENT_ID}})

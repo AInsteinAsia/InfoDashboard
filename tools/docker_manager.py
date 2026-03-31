@@ -60,7 +60,7 @@ def build_image(build_path: str, tag: str) -> None:
     _image, _logs = client.images.build(path=build_path, tag=tag, rm=True, forcerm=True)
 
 
-def run_dashboard(image_name: str, port: int, env_vars: dict[str, str]) -> str:
+def run_dashboard(image_name: str, port: int, env_vars: dict[str, str], extra_labels: dict[str, str] | None = None) -> str:
     """Start a dashboard container and return its container ID.
 
     Always uses explicit port mapping so the dashboard is reachable from the host
@@ -91,21 +91,31 @@ def run_dashboard(image_name: str, port: int, env_vars: dict[str, str]) -> str:
         ports={"8501/tcp": port},       # map container :8501 → host :<port>
         environment=env_vars,
         extra_hosts=extra_hosts,
-        labels={"managed-by": "info-dashboard"},
+        labels={"managed-by": "info-dashboard", **(extra_labels or {})},
         restart_policy={"Name": "unless-stopped"},
     )
     return container.id
 
 
 def stop_dashboard(container_id: str) -> None:
-    """Stop and remove a dashboard container."""
+    """Stop and remove a dashboard container, its image, and generated files."""
+    import shutil
+    from pathlib import Path
     client = get_client()
+    image_tag = None
+    generated_dir = None
     try:
         c = client.containers.get(container_id)
+        image_tag = c.image.tags[0] if c.image.tags else None
+        generated_dir = c.labels.get("generated-dir")
         c.stop(timeout=10)
         c.remove()
     except NotFound:
         pass
+    if image_tag:
+        remove_image(image_tag)
+    if generated_dir:
+        shutil.rmtree(generated_dir, ignore_errors=True)
 
 
 def list_dashboards() -> list[dict]:
