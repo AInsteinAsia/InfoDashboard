@@ -16,11 +16,13 @@ from __future__ import annotations
 
 import os
 import socket as _socket
+import threading
 
 import docker
 from docker.errors import ImageNotFound, NotFound
 
 _client: docker.DockerClient | None = None
+_port_lock = threading.Lock()  # serialize find_free_port + run_dashboard to prevent races
 
 LABEL = "managed-by=info-dashboard"
 
@@ -58,6 +60,21 @@ def build_image(build_path: str, tag: str) -> None:
     """Build a Docker image from the given directory (blocking)."""
     client = get_client()
     _image, _logs = client.images.build(path=build_path, tag=tag, rm=True, forcerm=True)
+
+
+def alloc_port_and_run(image_name: str, env_vars: dict[str, str],
+                       extra_labels: dict[str, str] | None = None,
+                       start: int = 8501, end: int = 8600) -> tuple[str, int]:
+    """Atomically find a free port and start the container under _port_lock.
+
+    Returns (container_id, port). Using this instead of calling find_free_port()
+    + run_dashboard() separately prevents TOCTOU races when multiple dashboards
+    are deployed concurrently.
+    """
+    with _port_lock:
+        port = find_free_port(start, end)
+        container_id = run_dashboard(image_name, port, env_vars, extra_labels)
+    return container_id, port
 
 
 def run_dashboard(image_name: str, port: int, env_vars: dict[str, str], extra_labels: dict[str, str] | None = None) -> str:

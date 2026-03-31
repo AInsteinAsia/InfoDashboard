@@ -186,7 +186,7 @@ def get_generated_list():
 async def redeploy_dashboard(dashboard_id: str):
     """Rebuild and restart a dashboard from its generated files (SSE stream)."""
     from orchestration.nodes.deployer import wait_healthy
-    from tools.docker_manager import build_image, find_free_port, run_dashboard as _run_dashboard
+    from tools.docker_manager import alloc_port_and_run, build_image
 
     base_dir = Path(os.getenv("GENERATED_DIR", "./generated")) / dashboard_id
     if not base_dir.exists() or not (base_dir / "app.py").exists():
@@ -204,7 +204,6 @@ async def redeploy_dashboard(dashboard_id: str):
             yield _emit(f"构建镜像 {image_name}...（首次约需 1-2 分钟）")
             await _asyncio.to_thread(build_image, str(base_dir), image_name)
 
-            port = find_free_port()
             db_config = _resolve_db_config(None)
             env_vars = {
                 "SOCKS5_HOST": db_config.socks5_host,
@@ -217,10 +216,13 @@ async def redeploy_dashboard(dashboard_id: str):
                 "DB_PASS": db_config.db_pass,
                 "DB_NAME": db_config.db_name,
             }
-            yield _emit(f"启动容器，端口 {port}...")
-            container_id = await _asyncio.to_thread(
-                _run_dashboard, image_name, port, env_vars,
+            port_start = int(os.getenv("DASHBOARD_PORT_START", "8501"))
+            port_end = int(os.getenv("DASHBOARD_PORT_END", "8600"))
+            yield _emit("分配端口并启动容器...")
+            container_id, port = await _asyncio.to_thread(
+                alloc_port_and_run, image_name, env_vars,
                 {"generated-dir": str(base_dir), "dashboard-id": dashboard_id},
+                port_start, port_end,
             )
 
             url = f"http://localhost:{port}"

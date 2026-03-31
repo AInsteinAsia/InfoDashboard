@@ -24,7 +24,7 @@ from langchain_core.runnables import RunnableConfig
 
 from orchestration._llm import emit
 from orchestration.state import DashboardState, DeploymentInfo
-from tools.docker_manager import build_image, find_free_port, run_dashboard
+from tools.docker_manager import alloc_port_and_run, build_image
 
 AGENT_ID = "deployer"
 AGENT_NAME = "部署运维工程师"
@@ -63,16 +63,6 @@ async def run(state: DashboardState, config: RunnableConfig) -> dict:
     )
     (base_dir / "Dockerfile").write_text(_DOCKERFILE, encoding="utf-8")
 
-    # ── Find free port ────────────────────────────────────────────────────────
-    port_start = int(os.getenv("DASHBOARD_PORT_START", "8501"))
-    port_end = int(os.getenv("DASHBOARD_PORT_END", "8600"))
-    try:
-        port = find_free_port(port_start, port_end)
-    except RuntimeError as exc:
-        await emit(config, {"type": "error", "data": {"message": str(exc)}})
-        await emit(config, {"type": "agent_end", "data": {"agentId": AGENT_ID}})
-        return {"error": str(exc)}
-
     # ── Docker build ──────────────────────────────────────────────────────────
     image_name = f"info-dashboard:{dashboard_id}"
     await emit(config, {
@@ -87,7 +77,9 @@ async def run(state: DashboardState, config: RunnableConfig) -> dict:
         await emit(config, {"type": "agent_end", "data": {"agentId": AGENT_ID}})
         return {"error": str(exc)}
 
-    # ── Docker run ────────────────────────────────────────────────────────────
+    # ── Docker run (port allocation + start are atomic under _port_lock) ──────
+    port_start = int(os.getenv("DASHBOARD_PORT_START", "8501"))
+    port_end = int(os.getenv("DASHBOARD_PORT_END", "8600"))
     db = state["db_config"]
     env_vars = {
         "SOCKS5_HOST": db.socks5_host,
@@ -102,12 +94,13 @@ async def run(state: DashboardState, config: RunnableConfig) -> dict:
     }
     await emit(config, {
         "type": "thinking",
-        "data": {"stage": "docker_run", "message": f"启动容器，端口 {port}..."},
+        "data": {"stage": "docker_run", "message": "分配端口并启动容器..."},
     })
     try:
-        container_id = await asyncio.to_thread(
-            run_dashboard, image_name, port, env_vars,
+        container_id, port = await asyncio.to_thread(
+            alloc_port_and_run, image_name, env_vars,
             {"generated-dir": str(base_dir), "dashboard-id": dashboard_id},
+            port_start, port_end,
         )
     except Exception as exc:
         await emit(config, {"type": "error", "data": {"message": f"容器启动失败：{exc}"}})
