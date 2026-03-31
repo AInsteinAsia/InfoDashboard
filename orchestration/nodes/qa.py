@@ -45,6 +45,21 @@ _SQL_INJECT_PATTERNS: list[tuple[str, str]] = [
     (r'cursor\.execute\s*\(.*?\.format\s*\(', "在 cursor.execute() 中使用 .format() 拼接 SQL"),
 ]
 
+# SQL Server 2016 dialect violations — functions that don't exist in this version
+_DIALECT_PATTERNS: list[tuple[str, str]] = [
+    (r'\bLIMIT\s+\d+', "SQL Server 不支持 LIMIT，请用 TOP n 或 OFFSET...FETCH NEXT"),
+    (r'\bNOW\s*\(\s*\)', "SQL Server 不支持 NOW()，请用 GETDATE()"),
+    (r'\bIFNULL\s*\(', "SQL Server 不支持 IFNULL()，请用 ISNULL()"),
+    (r'\bNVL\s*\(', "SQL Server 不支持 NVL()，请用 ISNULL()"),
+    (r'\bGROUP_CONCAT\s*\(', "SQL Server 2016 不支持 GROUP_CONCAT()，请用 FOR XML PATH 子查询"),
+    (r'\bSTRING_AGG\s*\(', "SQL Server 2016 不支持 STRING_AGG()，请用 FOR XML PATH 子查询"),
+    (r'\bDATE_FORMAT\s*\(', "SQL Server 不支持 DATE_FORMAT()，请用 FORMAT() 或 CONVERT()"),
+    (r'\bDATE_TRUNC\s*\(', "SQL Server 不支持 DATE_TRUNC()，请用 CAST(d AS DATE) 或 DATEADD/DATEDIFF"),
+    (r'\bSTR_TO_DATE\s*\(', "SQL Server 不支持 STR_TO_DATE()，请用 TRY_CAST() 或 CONVERT()"),
+    (r'\bCONCAT_WS\s*\(', "SQL Server 2016 不支持 CONCAT_WS()，请用 + 拼接"),
+    (r'(?<!\w)TRIM\s*\(', "SQL Server 2016 不支持 TRIM()，请用 LTRIM(RTRIM())"),
+]
+
 # Patterns that are outright dangerous in generated code
 _DANGEROUS_PATTERNS: list[tuple[str, str]] = [
     (r'\beval\s*\(', "禁止使用 eval()"),
@@ -92,12 +107,18 @@ async def run(state: DashboardState, config: RunnableConfig) -> dict:
     if re.search(r"LIKE\s+['\"]%[^%]|LIKE\s+['\"][^'\"]*[^%]%['\"]", code.app_py):
         issues.append("SQL LIKE 子句含未转义的 %（pytds 会报 string formatting 错误），必须写为 %%，如 LIKE '%%value%%'")
 
-    # ── Check 3: Dangerous code ───────────────────────────────────────────────
+    # ── Check 3: SQL Server 2016 dialect violations ───────────────────────────
+    await emit(config, {"type": "thinking", "data": {"stage": "dialect_check", "message": "检查 SQL Server 2016 方言兼容性..."}})
+    for pattern, desc in _DIALECT_PATTERNS:
+        if re.search(pattern, code.app_py, re.IGNORECASE):
+            issues.append(f"SQL Server 2016 兼容性：{desc}")
+
+    # ── Check 4: Dangerous code ───────────────────────────────────────────────
     for pattern, desc in _DANGEROUS_PATTERNS:
         if re.search(pattern, code.app_py):
             issues.append(f"危险代码：{desc}")
 
-    # ── Check 4: Mandatory DB template ───────────────────────────────────────
+    # ── Check 5: Mandatory DB template ───────────────────────────────────────
     if "get_conn" not in code.app_py:
         issues.append("缺少 get_conn() 函数（必须使用标准数据库连接模板）")
     if "socks.set_default_proxy" not in code.app_py:
@@ -105,7 +126,7 @@ async def run(state: DashboardState, config: RunnableConfig) -> dict:
     if "pytds" not in code.app_py:
         issues.append("未使用 pytds 连接数据库")
 
-    # ── Check 5: Bandit high-severity (best-effort) ───────────────────────────
+    # ── Check 6: Bandit high-severity (best-effort) ───────────────────────────
     await emit(config, {"type": "thinking", "data": {"stage": "bandit", "message": "运行 Bandit 安全扫描..."}})
     bandit_issues = _run_bandit(code.app_py)
     issues.extend(bandit_issues)
