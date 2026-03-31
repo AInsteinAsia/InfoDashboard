@@ -133,6 +133,7 @@ def list_dashboards() -> list[dict]:
             "status": c.status,
             "image": c.image.tags[0] if c.image.tags else "unknown",
             "ports": ports,
+            "dashboard_id": c.labels.get("dashboard-id", ""),
         })
     return result
 

@@ -270,6 +270,39 @@
     cursor: pointer;
   }
   .no-dashboards { color: var(--text-dim); font-size: 13px; }
+
+  /* ── Offline dashboards ── */
+  .offline-item {
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 12px 14px;
+    background: var(--surface);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 10px;
+    opacity: .75;
+  }
+  .offline-item.redeploying { opacity: 1; border-color: var(--accent); }
+  .btn-redeploy {
+    padding: 5px 12px;
+    font-size: 12px;
+    background: var(--accent-dim);
+    color: var(--accent);
+    border: 1px solid var(--accent-dim);
+    border-radius: 6px;
+    cursor: pointer;
+    font-weight: 600;
+  }
+  .restore-all-btn {
+    font-size: 11px;
+    padding: 4px 10px;
+    background: var(--surface);
+    border: 1px solid var(--accent-dim);
+    border-radius: 6px;
+    color: var(--accent);
+    cursor: pointer;
+  }
 </style>
 </head>
 <body>
@@ -303,6 +336,11 @@
       <button class="refresh-btn" onclick="loadDashboards()">刷新</button>
     </div>
     <div id="dashboardList"><span class="no-dashboards">暂无运行中的看板</span></div>
+    <div class="panel-title" id="offlineTitle" style="display:none;margin-top:16px">
+      离线看板
+      <button class="restore-all-btn" onclick="redeployAll()">一键恢复全部</button>
+    </div>
+    <div id="offlineList"></div>
   </div>
 
 </div>
@@ -495,7 +533,7 @@ function onDone({dashboardUrl, port, dashboardId}) {
   `;
   messagesEl.appendChild(card);
   messagesEl.scrollTop = messagesEl.scrollHeight;
-  setTimeout(loadDashboards, 1500);
+  setTimeout(() => { loadDashboards(); loadGenerated(); }, 1500);
 }
 
 function appendErrorCard(msg) {
@@ -554,8 +592,96 @@ function escHtml(s) {
   return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
 
+// ── Generated / offline dashboards ────────────────────────────────────────
+async function loadGenerated() {
+  const offlineTitle = document.getElementById('offlineTitle');
+  const offlineList  = document.getElementById('offlineList');
+  try {
+    const res = await fetch('/api/generated');
+    const {generated} = await res.json();
+    const offline = generated.filter(d => !d.running);
+    if (!offline.length) {
+      offlineTitle.style.display = 'none';
+      offlineList.innerHTML = '';
+      return;
+    }
+    offlineTitle.style.display = 'flex';
+    offlineList.innerHTML = offline.map(d => `
+      <div class="offline-item" id="offline-${d.id}">
+        <div class="dashboard-info">
+          <div class="dashboard-name">${d.id}</div>
+          <div class="dashboard-meta">已生成，未运行</div>
+        </div>
+        <button class="btn-redeploy" onclick="redeployOne('${d.id}', this)">重新部署</button>
+      </div>
+    `).join('');
+  } catch {
+    offlineTitle.style.display = 'none';
+  }
+}
+
+function redeployOne(dashboardId, btn) {
+  btn.disabled = true;
+  btn.textContent = '部署中...';
+  const item = document.getElementById(`offline-${dashboardId}`);
+  if (item) item.classList.add('redeploying');
+
+  // Clear chat and show progress
+  messagesEl.innerHTML = '';
+  agentCards = {};
+
+  fetch(`/api/generated/${dashboardId}/redeploy`, {method: 'POST'})
+    .then(res => {
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = '';
+      function pump() {
+        reader.read().then(({done, value}) => {
+          if (done) { refreshAll(); return; }
+          buf += decoder.decode(value, {stream: true});
+          const lines = buf.split('\n');
+          buf = lines.pop();
+          for (const line of lines) {
+            if (line.startsWith('data: ')) {
+              const raw = line.slice(6).trim();
+              if (raw === '[DONE]') { refreshAll(); return; }
+              try { handleEvent(JSON.parse(raw)); } catch {}
+            }
+          }
+          pump();
+        }).catch(err => {
+          appendErrorCard('连接中断：' + err.message);
+          refreshAll();
+        });
+      }
+      pump();
+    })
+    .catch(err => {
+      appendErrorCard('重新部署失败：' + err.message);
+      refreshAll();
+    });
+}
+
+async function redeployAll() {
+  const res = await fetch('/api/generated');
+  const {generated} = await res.json();
+  const offline = generated.filter(d => !d.running);
+  for (const d of offline) {
+    const btn = document.querySelector(`#offline-${d.id} .btn-redeploy`);
+    if (btn && !btn.disabled) redeployOne(d.id, btn);
+    await new Promise(r => setTimeout(r, 500)); // slight stagger
+  }
+}
+
+function refreshAll() {
+  loadDashboards();
+  loadGenerated();
+  sendBtn.disabled = false;
+}
+
 // Load on start
 loadDashboards();
+loadGenerated();
 </script>
 </body>
 </html>

@@ -20,7 +20,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 from fastapi import FastAPI
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
 load_dotenv(".env.local")   # load first; falls back to .env if not found
@@ -159,6 +159,86 @@ def get_dashboards():
 def delete_dashboard(container_id: str):
     stop_dashboard(container_id)
     return {"status": "stopped", "id": container_id}
+
+
+@app.get("/api/generated")
+def get_generated_list():
+    """List generated dashboard dirs and whether each has a running container."""
+    generated_dir = Path(os.getenv("GENERATED_DIR", "./generated"))
+    if not generated_dir.exists():
+        return {"generated": []}
+    try:
+        running_ids = {d.get("dashboard_id", "") for d in list_dashboards()}
+    except Exception:
+        running_ids = set()
+
+    result = []
+    for d in sorted(generated_dir.iterdir()):
+        if d.is_dir() and (d / "app.py").exists():
+            result.append({
+                "id": d.name,
+                "running": d.name in running_ids,
+            })
+    return {"generated": result}
+
+
+@app.post("/api/generated/{dashboard_id}/redeploy")
+async def redeploy_dashboard(dashboard_id: str):
+    """Rebuild and restart a dashboard from its generated files (SSE stream)."""
+    from orchestration.nodes.deployer import wait_healthy
+    from tools.docker_manager import build_image, find_free_port, run_dashboard as _run_dashboard
+
+    base_dir = Path(os.getenv("GENERATED_DIR", "./generated")) / dashboard_id
+    if not base_dir.exists() or not (base_dir / "app.py").exists():
+        return JSONResponse({"error": "generated dir not found"}, status_code=404)
+
+    image_name = f"info-dashboard:{dashboard_id}"
+
+    async def event_stream():
+        import asyncio as _asyncio
+
+        def _emit(msg: str):
+            return f"data: {json.dumps({'type': 'thinking', 'data': {'message': msg}}, ensure_ascii=False)}\n\n"
+
+        try:
+            yield _emit(f"构建镜像 {image_name}...（首次约需 1-2 分钟）")
+            await _asyncio.to_thread(build_image, str(base_dir), image_name)
+
+            port = find_free_port()
+            db_config = _resolve_db_config(None)
+            env_vars = {
+                "SOCKS5_HOST": db_config.socks5_host,
+                "SOCKS5_PORT": str(db_config.socks5_port),
+                "SOCKS5_USER": db_config.socks5_user,
+                "SOCKS5_PASS": db_config.socks5_pass,
+                "DB_HOST": db_config.db_host,
+                "DB_PORT": str(db_config.db_port),
+                "DB_USER": db_config.db_user,
+                "DB_PASS": db_config.db_pass,
+                "DB_NAME": db_config.db_name,
+            }
+            yield _emit(f"启动容器，端口 {port}...")
+            container_id = await _asyncio.to_thread(
+                _run_dashboard, image_name, port, env_vars,
+                {"generated-dir": str(base_dir), "dashboard-id": dashboard_id},
+            )
+
+            url = f"http://localhost:{port}"
+            yield _emit(f"等待服务就绪 {url} ...")
+            healthy = await wait_healthy(url, max_wait=90, interval=3)
+            if not healthy:
+                yield f"data: {json.dumps({'type': 'error', 'data': {'message': f'服务未能在 90 秒内就绪，请检查：docker logs {container_id[:12]}'}}, ensure_ascii=False)}\n\n"
+            else:
+                yield f"data: {json.dumps({'type': 'done', 'data': {'dashboardUrl': url, 'port': port, 'dashboardId': dashboard_id}}, ensure_ascii=False)}\n\n"
+        except Exception as exc:
+            yield f"data: {json.dumps({'type': 'error', 'data': {'message': str(exc)}}, ensure_ascii=False)}\n\n"
+        yield "data: [DONE]\n\n"
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "Connection": "keep-alive"},
+    )
 
 
 @app.get("/", response_class=HTMLResponse)

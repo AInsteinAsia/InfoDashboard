@@ -107,7 +107,7 @@ async def run(state: DashboardState, config: RunnableConfig) -> dict:
     try:
         container_id = await asyncio.to_thread(
             run_dashboard, image_name, port, env_vars,
-            {"generated-dir": str(base_dir)},
+            {"generated-dir": str(base_dir), "dashboard-id": dashboard_id},
         )
     except Exception as exc:
         await emit(config, {"type": "error", "data": {"message": f"容器启动失败：{exc}"}})
@@ -120,7 +120,7 @@ async def run(state: DashboardState, config: RunnableConfig) -> dict:
         "type": "thinking",
         "data": {"stage": "health_check", "message": f"等待服务就绪 {url} ..."},
     })
-    healthy = await _wait_healthy(url, max_wait=90, interval=3)
+    healthy = await wait_healthy(url, max_wait=90, interval=3)
 
     if not healthy:
         msg = f"服务 {url} 未能在 90 秒内就绪，请检查容器日志：docker logs {container_id[:12]}"
@@ -144,7 +144,7 @@ async def run(state: DashboardState, config: RunnableConfig) -> dict:
     return {"deployment": deployment}
 
 
-async def _wait_healthy(url: str, max_wait: int = 90, interval: int = 3) -> bool:
+async def wait_healthy(url: str, max_wait: int = 90, interval: int = 3) -> bool:
     """Poll the dashboard URL until it responds 2xx/3xx or timeout."""
     timeout = aiohttp.ClientTimeout(total=5)
     for _ in range(max_wait // interval):
