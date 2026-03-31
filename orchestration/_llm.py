@@ -8,8 +8,12 @@ Key design:
 """
 from __future__ import annotations
 
+import asyncio
+import logging
 import os
 from typing import TYPE_CHECKING
+
+_log = logging.getLogger(__name__)
 
 from langchain_core.messages import BaseMessage
 from langchain_core.runnables import RunnableConfig
@@ -43,19 +47,26 @@ async def stream_llm(
     messages: list[BaseMessage],
     config: RunnableConfig,
     agent_id: str,
+    max_attempts: int = 3,
 ) -> str:
     """Stream LLM output token by token, pushing text_delta events to the queue.
-    Returns the full accumulated response string."""
+    Returns the full accumulated response string. Retries up to max_attempts on empty response."""
     llm = get_llm()
-    full = ""
-    async for chunk in llm.astream(messages):
-        text = chunk.content if isinstance(chunk.content, str) else ""
-        if text:
-            full += text
-            await emit(config, {
-                "type": "text_delta",
-                "data": {"content": text, "agentId": agent_id},
-            })
+    for attempt in range(1, max_attempts + 1):
+        full = ""
+        async for chunk in llm.astream(messages):
+            text = chunk.content if isinstance(chunk.content, str) else ""
+            if text:
+                full += text
+                await emit(config, {
+                    "type": "text_delta",
+                    "data": {"content": text, "agentId": agent_id},
+                })
+        if full:
+            return full
+        _log.warning("stream_llm: empty response on attempt %d/%d", attempt, max_attempts)
+        if attempt < max_attempts:
+            await asyncio.sleep(2 ** attempt)  # 2s, 4s
     return full
 
 
