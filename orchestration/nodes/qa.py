@@ -138,11 +138,10 @@ async def run(state: DashboardState, config: RunnableConfig) -> dict:
     issues.extend(bandit_issues)
 
     # ── Check 7: SQL dry-run against real DB ──────────────────────────────────
-    # Only run if no static issues yet (no point if SQL is already flagged as broken)
-    if not issues:
-        await emit(config, {"type": "thinking", "data": {"stage": "sql_dryrun", "message": "对数据库执行 SQL 干跑验证..."}})
-        db_issues = await _sql_dry_run(code.app_py, state["db_config"])
-        issues.extend(db_issues)
+    # Always run — static checks miss semantic errors (wrong columns, bad JOINs, etc.)
+    await emit(config, {"type": "thinking", "data": {"stage": "sql_dryrun", "message": "对数据库执行 SQL 干跑验证..."}})
+    db_issues = await _sql_dry_run(code.app_py, state["db_config"])
+    issues.extend(db_issues)
 
     passed = len(issues) == 0
     feedback = (
