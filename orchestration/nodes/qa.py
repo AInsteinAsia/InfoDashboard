@@ -2,15 +2,18 @@
 QA & Security node.
 
 Responsibility:
-  Statically validate the generated Streamlit code before Docker deployment.
-  This node requires NO LLM — it's fast, deterministic, and cheap.
+  Statically validate the generated Streamlit code before Docker deployment,
+  then execute each SELECT query against the real database to catch runtime errors.
 
 Checks performed:
   1. Python syntax (ast.parse)
   2. Parameterized-query enforcement (no f-string/concat SQL)
-  3. Dangerous code patterns (eval, exec, os.system, subprocess)
-  4. Mandatory DB connection template presence
-  5. Bandit high-severity scan (best-effort; skipped if not installed)
+  2b. Unescaped % in LIKE clauses (pytds string formatting bug)
+  3. SQL Server 2016 dialect violations
+  4. Dangerous code patterns (eval, exec, os.system, subprocess)
+  5. Mandatory DB connection template presence
+  6. Bandit high-severity scan (best-effort; skipped if not installed)
+  7. SQL dry-run: execute each extracted SELECT against the real DB via SOCKS5
 
 If all checks pass → route to deployer.
 If any fail → build structured feedback → route back to developer (up to max_retries).
@@ -18,11 +21,14 @@ If any fail → build structured feedback → route back to developer (up to max
 from __future__ import annotations
 
 import ast
+import logging
 import os
 import re
 import subprocess
 import sys
 import tempfile
+
+_log = logging.getLogger(__name__)
 
 from langchain_core.runnables import RunnableConfig
 
@@ -131,6 +137,13 @@ async def run(state: DashboardState, config: RunnableConfig) -> dict:
     bandit_issues = _run_bandit(code.app_py)
     issues.extend(bandit_issues)
 
+    # ── Check 7: SQL dry-run against real DB ──────────────────────────────────
+    # Only run if no static issues yet (no point if SQL is already flagged as broken)
+    if not issues:
+        await emit(config, {"type": "thinking", "data": {"stage": "sql_dryrun", "message": "对数据库执行 SQL 干跑验证..."}})
+        db_issues = await _sql_dry_run(code.app_py, state["db_config"])
+        issues.extend(db_issues)
+
     passed = len(issues) == 0
     feedback = (
         "代码通过所有检查。" if passed
@@ -147,6 +160,58 @@ async def run(state: DashboardState, config: RunnableConfig) -> dict:
     await emit(config, {"type": "agent_end", "data": {"agentId": AGENT_ID}})
 
     return {"qa_result": QAResult(passed=passed, issues=issues, feedback=feedback)}
+
+
+def _extract_sql_statements(code: str) -> list[str]:
+    """Extract SQL strings from cursor.execute() calls using AST parsing."""
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return []
+    sqls = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if not (isinstance(func, ast.Attribute) and func.attr == "execute"):
+            continue
+        if node.args and isinstance(node.args[0], ast.Constant) and isinstance(node.args[0].value, str):
+            sqls.append(node.args[0].value)
+    return sqls
+
+
+async def _sql_dry_run(code: str, db_config) -> list[str]:
+    """Execute each extracted SELECT query against the real DB with NULL params.
+
+    Returns a list of error strings. Non-SELECT statements are skipped (safe).
+    Errors surface real problems: missing tables, invalid columns, wrong JOINs, etc.
+    """
+    import asyncio
+    from tools.database import execute_query
+
+    sqls = _extract_sql_statements(code)
+    if not sqls:
+        return []
+
+    errors = []
+    for sql in sqls:
+        # Only validate SELECT statements — skip anything else
+        stripped = sql.strip()
+        if not re.match(r"^\s*SELECT\b", stripped, re.IGNORECASE):
+            continue
+        # Restore real % from pytds-escaped %%, then replace %s params with NULL
+        test_sql = sql.replace("%%", "%").replace("%s", "NULL")
+        try:
+            await asyncio.wait_for(
+                execute_query(db_config, test_sql),
+                timeout=15,
+            )
+        except asyncio.TimeoutError:
+            errors.append(f"SQL 执行超时（>15s），可能缺少索引或查询过重：{test_sql[:120]}...")
+        except Exception as exc:
+            err_msg = str(exc).splitlines()[0][:200]
+            errors.append(f"SQL 执行错误：{err_msg}\n  SQL：{test_sql[:150].strip()}...")
+    return errors
 
 
 def _run_bandit(code: str) -> list[str]:
