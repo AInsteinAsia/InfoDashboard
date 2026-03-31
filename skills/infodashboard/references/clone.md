@@ -29,24 +29,24 @@ cd InfoDashboard
 Install dependencies:
 
 ```bash
-pip install -e .
+uv sync
 ```
 
 Or with development tools:
 
 ```bash
-pip install -e ".[dev]"
+uv sync --extra dev
 ```
 
 ## Prerequisites Check
 
 Before installing, confirm:
 
-- Python 3.10 or later is available (`python --version`)
+- `uv` is installed (`uv --version`); if not, install with `curl -LsSf https://astral.sh/uv/install.sh | sh`
 - Docker is installed and the daemon is running (`docker info`)
 
 ## Confirmation Requirements
 
 - Ask before `git clone`.
-- Ask before `pip install`.
+- Ask before `uv sync`.
 - If the repo is dirty, tell the user and ask whether to continue.
